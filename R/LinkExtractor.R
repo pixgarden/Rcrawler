@@ -342,7 +342,7 @@ LinkExtractor <- function(url, id, lev, IndexErrPages, Useragent, Timeout=6, use
                 ext<-tools::file_ext(sub("\\?.+", "", basename(links[s])))
                 # 6 Filtre eliminer les liens externes , le lien source lui meme, les lien avec diese et les liens deja dans dans liste ( evite double), les types de fichier filtrer, les lien tres longs , les liens de type share
                 #&& !(url==links[s])
-                if(grepl(domain,links[s]) && !(links[s] %in% links2) && !(ext %in% urlExtfilter) && grepl(pattern = urlregexfilter,x = links[s])){
+                if(grepl(domain,links[s]) && !(links[s] %in% links2) && !(ext %in% urlExtfilter) && grepl(pattern = urlregexfilter,x = links[s], perl = TRUE)){
                   links2<-c(links2,links[s])
                 #calcul de nombre des liens
                   nblinks<-nblinks+1
