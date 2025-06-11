@@ -480,8 +480,8 @@ Rcrawler <- function(Website, no_cores,no_conn, MaxDepth, DIR, RequestsDelay=0,O
     ToNode<-vector()
     Weight<-vector()
     Type<-vector()
-    pkg.env$GraphINDEX<-vector()
-    pkg.env$GraphINDEX<-c(pkg.env$GraphINDEX,Website)
+    pkg.env$GraphINDEX <- data.frame(ID = integer(), Url = character(), HttpStatus = integer(), stringsAsFactors = FALSE)
+    pkg.env$GraphINDEX[1, ] <- list(ID = 1, Url = Website, HttpStatus = NA_integer_)
     pkg.env$GraphEgdes<-data.frame(FromNode,ToNode,Weight,Type)
     names(pkg.env$GraphEgdes) <- c("From","To","Weight","Type")
   }
@@ -675,24 +675,74 @@ Rcrawler <- function(Website, no_cores,no_conn, MaxDepth, DIR, RequestsDelay=0,O
           }
 
         if (NetworkData) {
-          tmplinks<-vector()
-          tmplinks<-c(tmplinks,unlist(allpaquet[[s]][2]))
-          #tmplinks<-c(tmplinks,debugg[[s]][[1]][[2]])
-          if(length(tmplinks) > 0){
-            pkg.env$GraphINDEX<-c( pkg.env$GraphINDEX , tmplinks[ ! tmplinks %chin% pkg.env$GraphINDEX ] )
-            for(NodeElm in tmplinks){
-              posNodeFrom<-chmatch(c(allpaquet[[s]][[1]][[2]]),pkg.env$GraphINDEX)
-              pkg.env$GraphEgdes[nrow(pkg.env$GraphEgdes) + 1,]<-c(posNodeFrom,chmatch(c(NodeElm),pkg.env$GraphINDEX),lev,1)
+          # Get current URL and status
+          current_page_info <- allpaquet[[s]]$Info
+          crawled_url <- current_page_info$Url
+          http_status <- current_page_info$Status_code
+
+          # Check if crawled_url is already in NetwIndex
+          existing_url_idx <- chmatch(c(crawled_url), pkg.env$GraphINDEX$Url)
+
+          if (!is.na(existing_url_idx)) {
+            # URL exists, update its HttpStatus, especially if it was NA
+            if (is.na(pkg.env$GraphINDEX$HttpStatus[existing_url_idx]) || pkg.env$GraphINDEX$HttpStatus[existing_url_idx] == 0) { # Assuming 0 or NA is placeholder
+              pkg.env$GraphINDEX$HttpStatus[existing_url_idx] <- as.integer(http_status)
+            }
+            posNodeFrom <- existing_url_idx # ID of the crawled_url
+          } else {
+            # URL does not exist, add new row. ID will be the new row number.
+            new_id <- nrow(pkg.env$GraphINDEX) + 1
+            new_row <- data.frame(ID = new_id, Url = crawled_url, HttpStatus = as.integer(http_status), stringsAsFactors = FALSE)
+            pkg.env$GraphINDEX <- rbind(pkg.env$GraphINDEX, new_row)
+            posNodeFrom <- new_id # ID of the crawled_url
+          }
+
+          # Internal Links Processing
+          tmplinks <- allpaquet[[s]]$InternalLinks # Directly use the named component
+          if (length(tmplinks) > 0) {
+            for (NodeElm in tmplinks) {
+              if (is.null(NodeElm) || is.na(NodeElm) || NodeElm == "") next
+
+              existing_link_idx <- chmatch(c(NodeElm), pkg.env$GraphINDEX$Url)
+              posNodeTo <- NA_integer_
+
+              if (!is.na(existing_link_idx)) {
+                posNodeTo <- existing_link_idx
+              } else {
+                new_id_for_link <- nrow(pkg.env$GraphINDEX) + 1
+                new_row_for_link <- data.frame(ID = new_id_for_link, Url = NodeElm, HttpStatus = NA_integer_, stringsAsFactors = FALSE)
+                pkg.env$GraphINDEX <- rbind(pkg.env$GraphINDEX, new_row_for_link)
+                posNodeTo <- new_id_for_link
+              }
+
+              if (!is.na(posNodeFrom) && !is.na(posNodeTo)) {
+                pkg.env$GraphEgdes[nrow(pkg.env$GraphEgdes) + 1, ] <- c(posNodeFrom, posNodeTo, lev, 1)
+              }
             }
           }
+
+          # External Links Processing
           if(NetwExtLinks){
-            tmplinks2<-vector()
-            tmplinks2<-c(tmplinks2,unlist(allpaquet[[s]][3]))
-            if(length(tmplinks2) > 0){
-              pkg.env$GraphINDEX<-c( pkg.env$GraphINDEX , tmplinks2[ ! tmplinks2 %chin% pkg.env$GraphINDEX ] )
-              for(NodeElm in tmplinks2){
-                posNodeFrom<-chmatch(c(allpaquet[[s]][[1]][[2]]),pkg.env$GraphINDEX)
-                pkg.env$GraphEgdes[nrow(pkg.env$GraphEgdes) + 1,]<-c(posNodeFrom,chmatch(c(NodeElm),pkg.env$GraphINDEX),lev,2)
+            tmplinks2 <- allpaquet[[s]]$ExternalLinks # Directly use the named component
+            if (length(tmplinks2) > 0) {
+              for (NodeElm in tmplinks2) {
+                if (is.null(NodeElm) || is.na(NodeElm) || NodeElm == "") next
+
+                existing_link_idx <- chmatch(c(NodeElm), pkg.env$GraphINDEX$Url)
+                posNodeTo <- NA_integer_
+
+                if (!is.na(existing_link_idx)) {
+                  posNodeTo <- existing_link_idx
+                } else {
+                  new_id_for_link <- nrow(pkg.env$GraphINDEX) + 1
+                  new_row_for_link <- data.frame(ID = new_id_for_link, Url = NodeElm, HttpStatus = NA_integer_, stringsAsFactors = FALSE)
+                  pkg.env$GraphINDEX <- rbind(pkg.env$GraphINDEX, new_row_for_link)
+                  posNodeTo <- new_id_for_link
+                }
+
+                if (!is.na(posNodeFrom) && !is.na(posNodeTo)) {
+                  pkg.env$GraphEgdes[nrow(pkg.env$GraphEgdes) + 1, ] <- c(posNodeFrom, posNodeTo, lev, 2)
+                }
               }
             }
           }
