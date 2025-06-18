@@ -102,7 +102,7 @@ Data scraping is enabled by setting ExtractXpathPat or ExtractCSSPat parameter:
 
 If NetworkData is set to TRUE two additional global variables returned by the function are:
 
-- NetwIndex : Vector maps alls hyperlinks (nodes) with a unique integer ID
+- NetwIndex : data.frame representing nodes of the network, with these columns : ID, Url, HttpStatus, Nofollow (a logical value indicating if the link to this Url had a 'nofollow' attribute).
 
 - NetwEdges : data.frame representing edges of the network, with these column : From, To, Weight (the Depth level where the link connection has been discovered) and Type (1 for internal hyperlinks 2 for external hyperlinks).
 }

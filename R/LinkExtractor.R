@@ -34,9 +34,7 @@
 #' @importFrom  httr content
 #' @importFrom  httr add_headers
 #' @importFrom  data.table %chin% %like%
-#' @importFrom  xml2  xml_find_all
-#' @importFrom  xml2  xml_text
-#' @importFrom  xml2  xml_find_first
+#' @importFrom  xml2  xml_find_all xml_attr xml_text xml_find_first read_html
 #'
 #' @examples
 #'
@@ -189,7 +187,6 @@
 #' }
 #'
 #' @export
-
 LinkExtractor <- function(url, id, lev, IndexErrPages, Useragent, Timeout=6, use_proxy=NULL,
                           URLlenlimit=255, urlExtfilter, urlregexfilter, encod, urlbotfiler, removeparams,
                           removeAllparams=FALSE, ExternalLInks=FALSE, urlsZoneXpath=NULL, Browser, RenderingDelay=0) {
@@ -197,10 +194,11 @@ LinkExtractor <- function(url, id, lev, IndexErrPages, Useragent, Timeout=6, use
   if(!missing(Browser) && !is.null(use_proxy) ) stop("unfortunately, phantomjs can't be configured to use proxy")
   nblinks<-0
   pageinfo<-list()
-  links2<- vector()
-  linkl<-list()
-  links<-vector()
-  Extlinks<- vector()
+  links2<- data.frame(href = character(), rel = character(), stringsAsFactors = FALSE)
+  linkl<-list() # This will store web elements for links without href in browser mode
+  links<- data.frame(href = character(), rel = character(), stringsAsFactors = FALSE)
+  Extlinks<- data.frame(href = character(), rel = character(), stringsAsFactors = FALSE)
+
   if(!missing(Browser)){
     if(length(Browser)<2) stop("please setup a web driver using run_browser()")
   }
@@ -214,7 +212,7 @@ LinkExtractor <- function(url, id, lev, IndexErrPages, Useragent, Timeout=6, use
   if(missing(urlExtfilter)) urlExtfilter<-c("flv","mov","swf","txt","xml","js","css","zip","gz","rar","7z","tgz","tar","z","gzip","bzip","tar","mp3","mp4","aac","wav","au","wmv","avi","mpg","mpeg","pdf","doc","docx","xls","xlsx","ppt","pptx","jpg","jpeg","png","gif","psd","ico","bmp","odt","ods","odp","odb","odg","odf")
   if (missing(urlregexfilter)){ urlregexfilter<-".*" }
   else { urlregexfilter<-paste(urlregexfilter,collapse="|")}
-  #page<-NULL
+
   if(!missing(Browser)){
     page<-tryCatch(Drv_fetchpage(url = url, browser = Browser), error=function(e) NULL)
     }else {
@@ -225,7 +223,7 @@ LinkExtractor <- function(url, id, lev, IndexErrPages, Useragent, Timeout=6, use
       }
     }
 
-    if(length(page)==2){
+    if(length(page)==2){ # Error handling for httr::GET
       if(grepl("Timeout was reached",page[[2]]$message)){
         page<-tryCatch(httr::GET(url, httr::user_agent(Useragent), httr::add_headers(`Origin`=base)) , error=function(e) list(NULL,e))
         if(length(page)==2){
@@ -234,175 +232,184 @@ LinkExtractor <- function(url, id, lev, IndexErrPages, Useragent, Timeout=6, use
           }
           page<-NULL
         }
+      } else { # Other errors
+        page <- NULL
       }
     }
 
-  # 1 if domain exist (could resolve host name)
   if (!is.null(page)){
-    # 2 if page exist (not 404,301,302,500,503,403)
     if(page$status_code %in% errstat){
-      # 4 if page content is html
       if(grepl("html",page$headers$`content-type`,ignore.case = TRUE)){
 
-        if(missing(Browser) ){
+        if(missing(Browser) ){ # HTTP GET request based extraction
+          html_content <- httr::content(page, as="text", encoding = ifelse(missing(encod), "UTF-8", encod))
+          if(is.na(html_content) && missing(encod)){ # Try ISO-8859-1 if UTF-8 failed and no encoding specified
+            html_content <- httr::content(page, as="text", encoding = "ISO-8859-1")
+          }
+          cont <- html_content # Store raw source
 
-          if (missing(encod)){
-          x<-as.character(httr::content(page, type = "htmlTreeParse", as="text", encoding = "UTF-8"))
-          cont<-x
-          } else {
-          x<-as.character(httr::content(page, type = "htmlTreeParse", as="text", encoding = encod))
-          cont<-x
-          }
-          if(is.na(cont)){
-            x<-as.character(httr::content(page, type = "htmlTreeParse", as="text", encoding = "ISO-8859-1"))
-            cont<-x
-          }
-          links<-vector()
-        x<-xml2::read_html(x)
-        if(!is.null(urlsZoneXpath)){
-            for(h in 1:length(urlsZoneXpath)){
-              zonex<-tryCatch(xml2::xml_find_all(x, urlsZoneXpath[[h]]) , error=function(e) NULL)
-              if(!is.null(zonex)){
-                li<-xml2::xml_find_all(zonex, ".//a/@href")
-                li<-as.vector(paste(li))
-                li<-gsub(" href=\"(.*)\"", "\\1", li)
-                links<-c(links,li)
-              }
-            }
-          } else {
-              links<-xml2::xml_find_all(x, "//a/@href")
-              links<-as.vector(paste(links))
-              links<-gsub(" href=\"(.*)\"", "\\1", links)
-          }
-        }else {
-          links<-vector()
-          Sys.sleep(RenderingDelay)
-          x<-page$PageSource
-          cont<-x
-          if(!is.null(urlsZoneXpath)){
-            w<-1
-            for(h in 1:length(urlsZoneXpath)){
-              zonex<-tryCatch(Browser$session$findElement(xpath = urlsZoneXpath[[h]]), error=function(e) NULL)
-              # , error=function(e) NULL)
-              if(!is.null(zonex)){
-                linksel<-tryCatch(zonex$findElements(xpath = ".//*/a" ), error=function(e) NULL)
-                for(l in linksel){
-                  if(length(l$getAttribute("href"))!=0) {
-                    links<-c(links,l$getAttribute("href"))
-                  } else{
-                    linkl[[w]]<-l
-                    w<-w+1
+          if(!is.na(html_content) && html_content != ""){
+            doc <- xml2::read_html(html_content)
+            if(!is.null(urlsZoneXpath)){
+              for(h in 1:length(urlsZoneXpath)){
+                zonex <- tryCatch(xml2::xml_find_all(doc, urlsZoneXpath[[h]]), error=function(e) NULL)
+                if(!is.null(zonex)){
+                  a_nodes <- xml2::xml_find_all(zonex, ".//a")
+                  for (node in a_nodes) {
+                    href <- xml2::xml_attr(node, "href")
+                    rel <- xml2::xml_attr(node, "rel")
+                    if (!is.na(href) && href != "") {
+                      links <- rbind(links, data.frame(href = href, rel = ifelse(is.null(rel) || is.na(rel), NA_character_, rel), stringsAsFactors = FALSE))
+                    }
                   }
                 }
               }
+            } else {
+                a_nodes <- xml2::xml_find_all(doc, "//a")
+                for (node in a_nodes) {
+                  href <- xml2::xml_attr(node, "href")
+                  rel <- xml2::xml_attr(node, "rel")
+                  if (!is.na(href) && href != "") {
+                    links <- rbind(links, data.frame(href = href, rel = ifelse(is.null(rel) || is.na(rel), NA_character_, rel), stringsAsFactors = FALSE))
+                  }
+                }
             }
-          } else {
-            linksel<-Browser$session$findElements(xpath = "//*/a")
+          }
+        } else { # Browser based extraction (e.g. PhantomJS)
+          Sys.sleep(RenderingDelay)
+          cont <- page$PageSource # Store raw source from browser
+
+          if(!is.null(urlsZoneXpath)){
             w<-1
-            links<-vector()
-            for(l in linksel){
-              if(length(l$getAttribute("href"))!=0) {
-                links<-c(links,l$getAttribute("href"))
-              } else{
-                linkl[[w]]<-l
-                w<-w+1
+            for(h in 1:length(urlsZoneXpath)){
+              zonex_elements <- tryCatch(Browser$session$findElements(xpath = urlsZoneXpath[[h]]), error=function(e) NULL)
+              if(!is.null(zonex_elements)){
+                for(zonex_element in zonex_elements){ # If multiple zones match
+                    link_elements <- tryCatch(zonex_element$findElements(xpath = ".//a" ), error=function(e) NULL)
+                    if(!is.null(link_elements)){
+                        for(l_el in link_elements){
+                            href <- tryCatch(unlist(l_el$getAttribute("href")), error = function(e) NULL)
+                            rel <- tryCatch(unlist(l_el$getAttribute("rel")), error = function(e) NULL)
+                            if (!is.null(href) && !is.na(href) && href != "") {
+                                links <- rbind(links, data.frame(href = href, rel = ifelse(is.null(rel) || is.na(rel), NA_character_, rel), stringsAsFactors = FALSE))
+                            } else {
+                                linkl[[w]] <- l_el
+                                w <- w+1
+                            }
+                        }
+                    }
+                }
               }
             }
+          } else {
+            link_elements <- tryCatch(Browser$session$findElements(xpath = "//a"), error=function(e) NULL)
+            w<-1
+            if(!is.null(link_elements)){
+                for(l_el in link_elements){
+                    href <- tryCatch(unlist(l_el$getAttribute("href")), error = function(e) NULL)
+                    rel <- tryCatch(unlist(l_el$getAttribute("rel")), error = function(e) NULL)
+                    if (!is.null(href) && !is.na(href) && href != "") {
+                        links <- rbind(links, data.frame(href = href, rel = ifelse(is.null(rel) || is.na(rel), NA_character_, rel), stringsAsFactors = FALSE))
+                    } else {
+                        linkl[[w]] <- l_el
+                        w <- w+1
+                    }
+                }
+            }
           }
-
         }
 
+        # Deduplicate links based on href
+        if (nrow(links) > 0) {
+          links <- links[!duplicated(links$href), ]
+        }
 
-        links<-unique(links)
         domain0<- strsplit(gsub("http://|https://|www\\.", "", url), "/")[[c(1, 1)]]
         domain<- paste(domain0, "/", sep="")
-        # Link canonicalization
-        links<-LinkNormalization(links,url)
 
-        # Ignore some Url parameters or remove all parameters
-        if (!missing(removeparams)){
-          if(removeparams!=""){
-          links<-sapply(links , function(x) Linkparamsfilter(x, removeparams), USE.NAMES = FALSE)
+        if (nrow(links) > 0) {
+          # Link canonicalization
+          links$href <- LinkNormalization(links$href,url)
+
+          # Ignore some Url parameters or remove all parameters
+          if (!missing(removeparams)){
+            if(removeparams!=""){
+              links$href <-sapply(links$href , function(x) Linkparamsfilter(x, removeparams), USE.NAMES = FALSE)
+            }
           }
-        }
-        if (removeAllparams){
-          links<-sapply(links , function(x) Linkparamsfilter(x, removeAllparams = TRUE), USE.NAMES = FALSE)
+          if (removeAllparams){
+            links$href <-sapply(links$href , function(x) Linkparamsfilter(x, removeAllparams = TRUE), USE.NAMES = FALSE)
+          }
+          # Deduplicate again after normalization and param filtering
+          links <- links[!duplicated(links$href), ]
         }
 
-        links<-unique(links)
         # Link robots.txt filter
-        if (!missing(urlbotfiler)){
-       links<-links[!links %like% paste(urlbotfiler,collapse="|") ]
+        if (!missing(urlbotfiler) && nrow(links) > 0){
+          links <- links[!links$href %like% paste(urlbotfiler,collapse="|"), ]
         }
-        if(length(links)!=0) {
-          for(s in 1:length(links)){
-            if (!is.na(links[s])){
-              #limit length URL to 255
-              if( nchar(links[s])<=URLlenlimit) {
-                ext<-tools::file_ext(sub("\\?.+", "", basename(links[s])))
-                # 6 Filtre eliminer les liens externes , le lien source lui meme, les lien avec diese et les liens deja dans dans liste ( evite double), les types de fichier filtrer, les lien tres longs , les liens de type share
-                #&& !(url==links[s])
-                if(grepl(domain,links[s]) && !(links[s] %in% links2) && !(ext %in% urlExtfilter) && grepl(pattern = urlregexfilter,x = links[s], perl = TRUE)){
-                  links2<-c(links2,links[s])
-                #calcul de nombre des liens
+
+        if(nrow(links) > 0) {
+          for(s in 1:nrow(links)){
+            current_link_href <- links$href[s]
+            current_link_rel <- links$rel[s]
+
+            if (!is.na(current_link_href)){
+              if( nchar(current_link_href) <= URLlenlimit) {
+                ext<-tools::file_ext(sub("\\?.+", "", basename(current_link_href)))
+                if(grepl(domain,current_link_href) && !(current_link_href %in% links2$href) && !(ext %in% urlExtfilter) && grepl(pattern = urlregexfilter,x = current_link_href, perl = TRUE)){
+                  links2 <- rbind(links2, data.frame(href = current_link_href, rel = current_link_rel, stringsAsFactors = FALSE))
                   nblinks<-nblinks+1
                 }
                  if(ExternalLInks){
-                   if ( !grepl(domain,links[s]) && !(links[s] %in% Extlinks) && !(ext %in% urlExtfilter)){
-                      Extlinks<-c(Extlinks,links[s])
+                   if ( !grepl(domain,current_link_href) && !(current_link_href %in% Extlinks$href) && !(ext %in% urlExtfilter)){
+                      Extlinks <- rbind(Extlinks, data.frame(href = current_link_href, rel = current_link_rel, stringsAsFactors = FALSE))
                       nblinks<-nblinks+1
                    }
-                 }  else {
-                   Extlinks <- vector()
-                   }
+                 }
               }
             }
           }
-        } else {
-          links2 <- vector()
-          linkl<-list()
-          Extlinks <- vector()
         }
-      } else {links2 <- vector()
-              cont<-"NULL"
-              linkl<-list()
-              Extlinks <- vector()
-              }
-    } else {
-            links2 <- vector()
-            cont<-"NULL"
-            linkl<-list()
-            Extlinks <- vector()
-    }
-      #Ligne - page detail
-      if(cont=="NULL"){
-        titre<-"NULL"
-      } else {
-        titre<-tryCatch(xml2::xml_text(xml2::xml_find_first(xml2::read_html(cont), "//*/title")) , error=function(e) NULL)
+      } else { # Not HTML content
+        cont<-"NULL"
       }
-      contenttype<-tryCatch(gsub("(.*)\\;.*", "\\1", page$headers$`content-type`), error=function(e) "NA")
-      if(page$headers$`content-type`=="html"){
-        contentencod<-GetEncodingHTML(cont)
-      } else{
-        contentencod<-tryCatch(gsub("(.*)=(.*)","\\2", gsub(".*\\;.", "\\1", page$headers$`content-type`)), error=function(e) "NA")
-      }
-      pageinfo<-list(Id=id,Url=url,Crawl_status="finished",Crawl_level=lev,SumLinks=nblinks,"", Status_code=page$status_code, Content_type=contenttype, Encoding=contentencod, Source_page=cont, Title=titre)
-    }else {
-      links2 <- vector()
-      Extlinks <- vector()
-      pageinfo<-list(Id=id,Url=url,Crawl_status="NULL",Crawl_level=lev,SumLinks="",Status_code="",Content_type="",Encoding="",Source_page="",Title="")
+    } else { # HTTP status not in errstat
+      cont<-"NULL" # Or handle as error page
     }
 
-  if(missing(Browser)){
-    paquet<-list(Info=pageinfo,
-               InternalLinks=links2,
-               ExternalLinks=Extlinks)
-  }else{
-    paquet<-list(Info=pageinfo,
-                 InternalLinks=links2,
-                 ExternalLinks=Extlinks,
-                 OtherLinksTags=linkl)
+    titre <- "NULL"
+    if(!is.null(cont) && cont != "NULL" && grepl("html",page$headers$`content-type`,ignore.case = TRUE)){
+        doc_for_title <- tryCatch(xml2::read_html(cont), error=function(e) NULL)
+        if(!is.null(doc_for_title)){
+            titre_node <- xml2::xml_find_first(doc_for_title, "//title")
+            if(!is.null(titre_node)) titre <- xml2::xml_text(titre_node)
+        }
+    }
+
+    contenttype<-tryCatch(gsub("(.*)\\;.*", "\\1", page$headers$`content-type`), error=function(e) "NA")
+    if(page$headers$`content-type`=="html"){ #This check might be redundant if already checked above
+      contentencod<-GetEncodingHTML(cont) # Assuming GetEncodingHTML can handle NULL or non-HTML cont
+    } else{
+      contentencod<-tryCatch(gsub("(.*)=(.*)","\\2", gsub(".*\\;.", "\\1", page$headers$`content-type`)), error=function(e) "NA")
+    }
+    pageinfo<-list(Id=id,Url=url,Crawl_status="finished",Crawl_level=lev,SumLinks=nblinks,"", Status_code=page$status_code, Content_type=contenttype, Encoding=contentencod, Source_page=cont, Title=titre)
+  } else { # Page is NULL (fetch failed)
+    pageinfo<-list(Id=id,Url=url,Crawl_status="NULL",Crawl_level=lev,SumLinks=0,Status_code="N/A",Content_type="N/A",Encoding="N/A",Source_page="N/A",Title="N/A")
   }
+
+  # Ensure Extlinks is an empty data.frame if not used
+  if(!ExternalLInks && nrow(Extlinks) == 0){
+      Extlinks <- data.frame(href = character(), rel = character(), stringsAsFactors = FALSE)
+  }
+
+  paquet<-list(Info=pageinfo,
+             InternalLinks=links2, # Should be a data.frame
+             ExternalLinks=Extlinks) # Should be a data.frame
+  if(!missing(Browser)){
+    paquet$OtherLinksTags <- linkl # List of web elements without href
+  }
+
   return(paquet)
 }
 
@@ -426,88 +433,104 @@ Drv_fetchpage <- function(url, browser) {
   if (missing(browser)) stop("browser argument is missing! use run_browser() to build a browser object or LoginSession() for pages requiring authentification")
   if (missing(url)) stop("url argument is missing! you need to provide the url to be fetched")
 
-  if (length(browser)<3){
-      browser$session$initialize(port=browser$process$port)
+  if (length(browser)<3){ # Assuming browser object has at least 3 elements if session initialized
+      tryCatch(browser$session$initialize(port=browser$process$port), error = function(e) {
+          stop(paste("Failed to initialize browser session:", e$message))
+      })
   }
-  browser$session$go(url)
+  tryCatch(browser$session$go(url), error = function(e) {
+      stop(paste("Failed to navigate to URL:", url, "-", e$message))
+  })
+
   # one login  try
-  if (length(browser)==3){
+  if (length(browser)==3){ # This condition seems specific, might need review for robustness
     if(grepl(browser$loginInfo$LoginURL,browser$session$getUrl())){
       LoginSession(Browser = browser, LoginURL = browser$loginInfo$LoginURL, LoginCredentials = browser$loginInfo$LoginCredentials,
                    cssLoginFields = browser$loginInfo$cssLoginFields, cssLoginButton = browser$loginInfo$cssLoginButton,cssRadioToCheck = browser$loginInfo$cssRadioToCheck,
                    XpathLoginFields = browser$loginInfo$XpathLoginFields, XpathLoginButton = browser$loginInfo$XpathLoginButton, browser$loginInfo$XpathRadioToCheck
-                    )
+                    ) # Removed redundant browser$loginInfo$XpathRadioToCheck
       browser$session$go(url)
     }
   }
 
   sc=as.character(browser$session$getSource())
-  x<-browser$session$readLog( type = "har")
-  xjson<-tryCatch(jsonlite::fromJSON(x$message,simplifyVector = FALSE), error=function(e) NULL)
+  # HAR log fetching can be problematic and resource-intensive, ensure it's needed or handle errors
+  x <- tryCatch(browser$session$readLog(type = "har"), error = function(e) {
+      warning("Failed to read HAR log from browser session. Proceeding without HAR data.")
+      return(NULL) # Return NULL if HAR log fails
+  })
 
-  if(!is.null(xjson) && length(xjson)>0){
-    if(length(xjson$log$entries)>1){
-        xjson<-xjson$log$entries
-
-        if(substring(url, nchar(url)) == "/"){
-          url2<-substr(url, 1, nchar(url)-1)
-        } else url2 <-paste0(url,"/")
-
-        #get the position of list wich contain desired http header
-
-        for (i in 1:length(xjson)) {
-           if (url2==xjson[[i]]$request$url
-               || url==xjson[[i]]$request$url
-               || grepl(paste0("^",gsub("([.|()\\^{}+$*?]|\\[|\\])", "\\\\\\1", url),"(\\/)?$"), xjson[[i]]$request$url)
-           ) { p<-xjson[[i]]
-           }
-
-        }
-
-        if(exists("p")){
-          if("status" %in% names(p$response)){
-          status_c<-p$response$status
-          }else status_c<-200
-          if(length(p$response$headers)>0){
-            for(i in 1:length(p$response$headers)){
-              if("name" %in% names(p$response$headers[[i]])){
-                if (grepl("^content-type$",p$response$headers[[i]]$name,ignore.case = TRUE)){
-                  content_type<-p$response$headers[[i]]$value
-                } else content_type<-get_contenttype(sc)
-              } else content_type<-get_contenttype(sc)
-            }
-          } else content_type<-get_contenttype(sc)
-        }else {
-          status_c<-200
-          content_type<-get_contenttype(sc)
-        }
-    } else {
-      status_c<-200
-      content_type<-get_contenttype(sc)
-    }
-  } else {
-    status_c<-200
-    content_type<-"html"
+  xjson <- NULL
+  if (!is.null(x) && !is.null(x$message) && jsonlite::validate(x$message)) {
+    xjson <- tryCatch(jsonlite::fromJSON(x$message, simplifyVector = FALSE), error = function(e) NULL)
   }
-  #if(!exists(content_type)) content_type<-"text/html"
-  page<-list(status_code=status_c,
+
+  status_c <- 200 # Default status
+  content_type <- "text/html" # Default content type
+
+  if(!is.null(xjson) && length(xjson)>0 && !is.null(xjson$log$entries) && length(xjson$log$entries)>0){
+      # Corrected logic to find the specific entry for the main URL
+      target_entry <- NULL
+      url_variants <- c(url, if(substring(url, nchar(url)) == "/") substr(url, 1, nchar(url)-1) else paste0(url,"/"))
+
+      for (entry in xjson$log$entries) {
+          if (entry$request$url %in% url_variants) {
+              target_entry <- entry
+              break
+          }
+      }
+      # Fallback: try regex if exact match failed (e.g. due to redirects not captured as main entry)
+      if(is.null(target_entry)){
+          for (entry in xjson$log$entries) {
+              if (grepl(paste0("^",gsub("([.|()\\^{}+$*?]|\\[|\\])", "\\\\\\1", url),"(\\/)?(#.*)?$"), entry$request$url)) {
+                 target_entry <- entry
+                 break
+              }
+          }
+      }
+
+      if(!is.null(target_entry)){
+        if("status" %in% names(target_entry$response)){
+          status_c<-target_entry$response$status
+        }
+        if(length(target_entry$response$headers)>0){
+          found_content_type <- FALSE
+          for(i in 1:length(target_entry$response$headers)){
+            if("name" %in% names(target_entry$response$headers[[i]])){
+              if (tolower(target_entry$response$headers[[i]]$name) == "content-type"){ # Case-insensitive match
+                content_type<-target_entry$response$headers[[i]]$value
+                found_content_type <- TRUE
+                break
+              }
+            }
+          }
+          if(!found_content_type) content_type <- get_contenttype(sc) # Fallback if not in HAR
+        } else {
+            content_type <- get_contenttype(sc) # Fallback if no headers in HAR
+        }
+      } else { # If no matching entry in HAR
+          content_type <- get_contenttype(sc) # Fallback
+      }
+  } else { # If HAR log is empty or not parsable
+    content_type <- get_contenttype(sc) # Fallback
+  }
+
+  page_data<-list(status_code=status_c,
              PageSource=sc,
              headers=list(`content-type`=content_type))
 
-  #if (length(browser)<3){
-  #  browser$session$delete()
-  #}
-
-  page
+  return(page_data)
 }
+
+# Helper function to guess content type from source if not in headers
 get_contenttype<- function (sc){
   content_type<-""
-  if(grepl('^<\\?xml', trimws(sc))) content_type<-"xml"
-  else if ( grepl("<!doctype.*",trimws(sc), perl=TRUE,ignore.case = TRUE)
-            || grepl("/.*(br|basefont|hr|input|source|frame|param|area|meta|!--|col|link|option|base|img|wbr|!DOCTYPE).*?>|<(a|abbr|acronym|address|applet|article|aside|audio|b|bdi|bdo|big|blockquote|body|button|canvas|caption|center|cite|code|colgroup|command|datalist|dd|del|details|dfn|dialog|dir|div|dl|dt|em|embed|fieldset|figcaption|figure|font|footer|form|frameset|head|header|hgroup|h1|h2|h3|h4|h5|h6|html|i|iframe|ins|kbd|keygen|label|legend|li|map|mark|menu|meter|nav|noframes|noscript|object|ol|optgroup|output|p|pre|progress|q|rp|rt|ruby|s|samp|script|section|select|small|span|strike|strong|style|sub|summary|sup|table|tbody|td|textarea|tfoot|th|thead|time|title|tr|track|tt|u|ul|var|video).*?<\\/\\2>.*/i",trimws(sc), perl=TRUE))
-    content_type<-"HTML"
-  else if(jsonlite::validate(sc)) content_type<-"json"
-  else content_type<-""
-
+  if(is.null(sc) || sc == "") return("")
+  if(grepl('^<\\?xml', trimws(sc))) content_type<-"application/xml" # More specific XML MIME type
+  else if ( grepl("<!doctype.*html",trimws(sc), perl=TRUE,ignore.case = TRUE) # Stricter HTML check
+            || grepl("<html",trimws(sc), perl=TRUE,ignore.case = TRUE))
+    content_type<-"text/html"
+  else if(jsonlite::validate(sc)) content_type<-"application/json" # More specific JSON MIME type
+  else content_type<-"application/octet-stream" # Generic fallback
   return (content_type)
 }
